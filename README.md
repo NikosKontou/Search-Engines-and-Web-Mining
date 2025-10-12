@@ -1,5 +1,5 @@
 # Wikipedia Scraper
-
+# By Antoniadis, Kontoudakis, Skolarikos
 A lightweight Python scraper for extracting text and structured data (such as episode lists) from Wikipedia pages.
 
 ## Features
