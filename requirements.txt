@@ -1,5 +1,4 @@
-bs4 
-urllib 
+bs4
 requests 
 re 
 hashlib
