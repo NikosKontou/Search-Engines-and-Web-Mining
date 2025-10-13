@@ -1,0 +1,5 @@
+bs4 
+urllib 
+requests 
+re 
+hashlib
