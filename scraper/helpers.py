@@ -1,9 +1,12 @@
 import sys
 
+from cleaning.helpers import ScraperHelper
+
 sys.path.append('/usr/lib/python3.13/site-packages')
 
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+from cleaning import helpers
 import requests
 import os
 import re
@@ -142,3 +145,25 @@ def url_to_filename(url, max_length=255):
         safe_base = safe_base[:max_length - 11] + "_" + hash_part
 
     return safe_base
+
+def write_data(file_path: str, text: str, scraper_helper: ScraperHelper)-> None:
+    """
+    a simple wrapper for data cleaning per file
+    :param file_path: name of the file
+    :param text: the document's content
+    :param scraper_helper: ScraperHelper object
+    :return: nothing
+    """
+    text = scraper_helper.lowercase_text(text=text)
+    text = scraper_helper.replace_urls(text=text)
+    text = scraper_helper.remove_and_print(text = text)
+    text = scraper_helper.replace_usernames(text = text)
+    text = scraper_helper.clean_text(text = text)
+    text = scraper_helper.remove_consecutive_letters(text = text)
+    text = scraper_helper.remove_short_words(text=text)
+    text = scraper_helper.remove_stopwords(text=text)
+    # maybe we shouldn't lematize because transformers will take care of it?'
+    # text = scraper_helper.lemmatize_text(text=text)
+    text = scraper_helper.remove_punctuation(text=text)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(text)
