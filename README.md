@@ -1,6 +1,7 @@
 # Wikipedia Scraper
 # By Antoniadis, Kontoudakis, Skolarikos
 A lightweight Python scraper for extracting text and structured data (such as episode lists) from Wikipedia pages.
+A web GUI that uses the scrapped documents for a virtual assistant.
 
 ## Features
 
@@ -14,6 +15,12 @@ A lightweight Python scraper for extracting text and structured data (such as ep
 ```bash
 python main.py
 ```
+## Start web gui
+
+```bash
+python -m streamlit run "web_gui/streamlit.py" --server.address=localhost --browser.gatherUsageStats=false
+```
+
 
 Each page’s content is saved under:
 
