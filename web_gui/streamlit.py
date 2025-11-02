@@ -13,6 +13,24 @@ st.set_page_config(layout="wide")
 
 
 # new code
+# --- Initialize essential session state keys ---
+for key, default_value in {
+    'my_embeddings': np.array([]),
+    'my_sentences': [],
+    'my_sentences_rag_ids': [],
+    'my_doc_ids': [],
+    'my_chat_messages': [{"role": "system", "content": "You are a helpful assistant."}],
+    'rag_docs': {},
+    'min_window_size': 2,
+    'max_window_size': 3,
+    'nof_min_sub_prompts': 1,
+    'nof_max_sub_prompts': 3,
+    'nof_keep_sentences': 5,
+    'my_similarity_threshold': 0.3,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default_value
+
 
 
 
@@ -36,7 +54,7 @@ def load_texts_from_directory(base_dir: str) -> dict:
 
 
 # Load RAG documents
-my_data_dir = "/Top/ACG/Year_2/timester 1/search engines/search-engines-project/corpus"  # change this path
+my_data_dir = "/Top/ACG/Year_2/timester 1/search engines/Search-Engines-and-Web-Mining/corpus"
 rag_docs = load_texts_from_directory(my_data_dir)
 
 # Combine for UI preview (optional)
@@ -112,62 +130,79 @@ def delete_chat_messages():
 
 
 def create_sentences_rag():
-    with rag_status_placeholder:
-        print("Am I even loading?")
-        pattern = r'(?<=[.?!;:])\s+|\n'
+    """
+    Build rolling-window sentence chunks and embeddings for all RAG documents.
+    Automatically rebuilds when text or window settings change.
+    """
+    if 'rag_docs' not in st.session_state or not st.session_state['rag_docs']:
+        st.warning("No RAG documents loaded.")
+        return
 
-        st.session_state['my_sentences_rag'] = []
-        st.session_state['my_sentences_rag_ids'] = []
-        st.session_state['my_doc_ids'] = []  # new: track document each chunk came from
+    pattern = r'(?<=[.!?])\s+'
 
-        all_sentences = []
-        all_embeddings = []
+    # Cache hash to detect content changes
+    doc_hash = hash(str(st.session_state['rag_docs'])
+                    + str(st.session_state['min_window_size'])
+                    + str(st.session_state['max_window_size']))
 
-        # Loop over each document separately
-        for doc_path, doc_text in rag_docs.items():
-            sentences = [s.strip() for s in re.split(pattern, doc_text) if s.strip()]
-            doc_chunks = []
-            doc_chunk_ids = []
+    if st.session_state.get('last_doc_hash') == doc_hash:
+        st.info("RAG documents unchanged — using cached embeddings.")
+        return
 
-            if not sentences:
-                print(f"⚠️ Skipping {doc_path} — no sentences found.")
+    # Initialize/reset storage
+    st.session_state['my_sentences'] = []
+    st.session_state['my_sentences_rag'] = []
+    st.session_state['my_sentences_rag_ids'] = []
+    st.session_state['my_doc_ids'] = []
+    all_embeddings = []
+    all_sentences = []
+
+    st.info("Building RAG embeddings…")
+
+    for doc_path, doc_text in st.session_state['rag_docs'].items():
+        # ✅ split into sentences safely
+        sentences = [s.strip() for s in re.split(pattern, doc_text) if s.strip()]
+
+        if not sentences:
+            st.warning(f"No sentences found in {doc_path}. Skipping.")
+            continue
+
+        doc_chunks = []
+        doc_chunk_ids = []
+
+        for rolling_window_size in range(
+            st.session_state['min_window_size'],
+            st.session_state['max_window_size'] + 1
+        ):
+            # ✅ Prevent negative range bug
+            if len(sentences) < rolling_window_size:
                 continue
 
-            max_window = min(st.session_state['max_window_size'], len(sentences))
-            min_window = min(st.session_state['min_window_size'], max_window)
-            for rolling_window_size in range(min_window, max_window + 1):
+            for i in range(0, len(sentences) - rolling_window_size + 1):
+                chunk = " ".join(sentences[i:i + rolling_window_size]).strip()
+                if chunk:
+                    doc_chunks.append(chunk)
+                    doc_chunk_ids.append(list(range(i, i + rolling_window_size)))
+                    st.session_state['my_doc_ids'].append(doc_path)
 
-                # Skip window sizes bigger than the number of sentences in this doc
-                if rolling_window_size > len(sentences):
-                    continue
-
-                for i in range(0, len(sentences) - rolling_window_size + 1):
-                    chunk = " ".join(sentences[i:i + rolling_window_size]).strip()
-                    if chunk:
-                        doc_chunks.append(chunk)
-                        doc_chunk_ids.append(list(range(i, i + rolling_window_size)))
-                        st.session_state['my_doc_ids'].append(doc_path)
-
-            # Handle very short docs (fewer sentences than min_window_size)
-            if not doc_chunks and sentences:
-                short_chunk = " ".join(sentences)
-                doc_chunks = [short_chunk]
-                doc_chunk_ids = [list(range(len(sentences)))]
-                st.session_state['my_doc_ids'].append(doc_path)
-                print(f"📄 Added short doc as single chunk: {doc_path}")
-
-            if doc_chunks:
+        if doc_chunks:
+            try:
                 embeddings = st.session_state['embeddings_model'].encode(doc_chunks)
                 all_embeddings.extend(embeddings)
                 all_sentences.extend(sentences)
                 st.session_state['my_sentences_rag'].extend(doc_chunks)
                 st.session_state['my_sentences_rag_ids'].extend(doc_chunk_ids)
+            except Exception as e:
+                st.error(f"Embedding failed for {doc_path}: {e}")
+                continue
 
-        st.session_state['my_sentences'] = all_sentences
+    if all_embeddings:
         st.session_state['my_embeddings'] = np.array(all_embeddings)
-
-        st.success(f"Encoded {len(st.session_state['my_sentences_rag'])} chunks "
-                   f"from {len(rag_docs)} documents!")
+        st.session_state['my_sentences'] = all_sentences
+        st.session_state['last_doc_hash'] = doc_hash
+        st.success(f"✅ Indexed {len(all_sentences)} sentences across {len(st.session_state['rag_docs'])} documents.")
+    else:
+        st.warning("No embeddings created — check your document contents.")
 
 
 
@@ -264,110 +299,129 @@ with column_2:
             messages_container.chat_message(message['role'], avatar=":material/robot_2:").markdown(message['content'])
 
     # Check if there is a new prompt from the user
+    # Check if there is a new prompt from the user
     if prompt := st.chat_input("you may ask here your questions"):
 
-        # Split the prompt into words
-        split_prompt = prompt.split(" ")
+        # 🧹 Reset per-question context (avoid reuse)
+        st.session_state.pop('similarities_to_question', None)
+        st.session_state.pop('current_context_indices', None)
+
+        # 🧩 Split the prompt into sub-prompts for rolling comparisons
+        split_prompt = prompt.split()
         all_sub_prompts = []
-        # Generate sub-prompts based on the specified range
-        for jj in range(st.session_state['nof_min_sub_prompts'], st.session_state['nof_max_sub_prompts'] + 1):
+        for jj in range(st.session_state['nof_min_sub_prompts'],
+                        st.session_state['nof_max_sub_prompts'] + 1):
             for ii in range(len(split_prompt)):
-                # Create sub-prompt by joining words
-                i_split = " ".join(split_prompt[ii:ii + jj]).strip()
-                if i_split:
-                    all_sub_prompts.append(i_split)
+                sub = " ".join(split_prompt[ii:ii + jj]).strip()
+                if sub:
+                    all_sub_prompts.append(sub)
 
+        # 🧠 Compute similarity scores fresh for this question
         similarities_to_question = np.zeros(len(st.session_state['my_embeddings']))
+        # 🧠 Compute similarity scores fresh for this question
+        embeddings = st.session_state.get('my_embeddings', np.array([]))
+        if embeddings.size == 0:
+            st.warning("No embeddings available — please load or reindex documents before asking questions.")
+            st.stop()
+
+        similarities_to_question = np.zeros(len(embeddings))
         for sub_prompt in all_sub_prompts:
-            # Encode the user's prompt to get its embedding
-            my_question_embedding = st.session_state.embeddings_model.encode([sub_prompt])
+            q_emb = st.session_state['embeddings_model'].encode([sub_prompt])
+            similarities_to_question += cosine_similarity(q_emb, embeddings).flatten()
 
-            # Calculate the cosine similarity between the prompt embedding and stored embeddings
-            similarities_to_question += cosine_similarity(my_question_embedding,
-                                                          st.session_state['my_embeddings']).flatten()
-        similarities_to_question /= len(all_sub_prompts)
+        for sub_prompt in all_sub_prompts:
+            q_emb = st.session_state['embeddings_model'].encode([sub_prompt])
+            similarities_to_question += cosine_similarity(
+                q_emb, st.session_state['my_embeddings']
+            ).flatten()
 
-        # Get the indices of the top similar sentences
-        bottom_col1, bottom_col2 = st.columns([1, 1])
+        similarities_to_question /= max(len(all_sub_prompts), 1)
+        st.session_state['similarities_to_question'] = similarities_to_question
+
+        # 🧮 Rank by similarity
         sorted_indices_rag = similarities_to_question.argsort()[::-1]
         sorted_indices_sentences = []
-        max_similarity = 0
-        # for irag in range(st.session_state['nof_keep_sentences']):
+        max_similarity = 0.0
+
+        bottom_col1, bottom_col2 = st.columns([1, 1])
+
         irag = 0
         while len(set(sorted_indices_sentences)) < st.session_state['nof_keep_sentences'] and irag < len(
                 sorted_indices_rag):
             sorted_indices_sentences.extend(st.session_state['my_sentences_rag_ids'][sorted_indices_rag[irag]])
             max_similarity = max(max_similarity, similarities_to_question[sorted_indices_rag[irag]])
-            with bottom_col1:
-                # new code replaces
-                # str_conf = f"Confidence: {similarities_to_question[sorted_indices_rag[irag]]:.5f}, Sentences IDs: ..."
 
+            with bottom_col1:
                 doc_source = os.path.basename(st.session_state['my_doc_ids'][sorted_indices_rag[irag]])
                 str_conf = (
                     f"Confidence: {similarities_to_question[sorted_indices_rag[irag]]:.5f} "
                     f"(Source: {doc_source})"
                 )
-                # new code ends
-
-                with st.expander(f"Chunk: {str(irag + 1)} {str_conf}"):
+                with st.expander(f"Chunk {irag + 1}: {str_conf}"):
                     for idx in st.session_state['my_sentences_rag_ids'][sorted_indices_rag[irag]]:
-                        st.write(f"{st.session_state['my_sentences'][idx]}")
+                        st.write(st.session_state['my_sentences'][idx])
             irag += 1
 
         sorted_indices_sentences = sorted(list(set(sorted_indices_sentences)))
+        st.session_state['current_context_indices'] = sorted_indices_sentences
 
-        # Display the user's prompt in the chat container with a specific avatar
+        # 💬 Display user question
         messages_container.chat_message("user", avatar=":material/psychology_alt:").markdown(prompt)
 
-        # Create an empty container for the streaming response from the assistant
+        # 🧠 Prepare RAG context dynamically
         with messages_container.chat_message("ai", avatar=":material/robot_2:"):
             response_placeholder = st.empty()
+            response = ""
+            augmented_prompt = ""
+
             if max_similarity > st.session_state['my_similarity_threshold']:
-                # Construct the augmented prompt with the similar sentences
-                augmented_prompt = "This is my context:" + "\n\n" + 20 * "-" + "\n\n"
-                augmented_prompt += "\n".join(
-                    [st.session_state['my_sentences'][idx] for idx in sorted_indices_sentences])
-                augmented_prompt += "\n\n" + 20 * "-" + "\n\n" + "If the above context is not relevant to the prompt, ignore the context and reply based only on the prompt."
-                augmented_prompt += "\n\n" + 20 * "-" + "\n\n" + "If the above context is relevant to the prompt, reply based on the context and the prompt."
-                augmented_prompt += "\n\n" + 20 * "-" + "\n\n" + "The prompt is:"
-                augmented_prompt += "\n\n" + f"\n\n{prompt}"
-                # Append the augmented prompt to the chat messages in the session state
-                st.session_state['my_chat_messages'].append({"role": "user", "content": augmented_prompt})
-                # Stream the response from the assistant and update the placeholder
-                response = ""
+                context_text = "\n".join(
+                    [st.session_state['my_sentences'][idx] for idx in sorted_indices_sentences]
+                )
+
+                augmented_prompt = (
+                        "This is my context:\n\n" + "-" * 20 + "\n\n" +
+                        context_text +
+                        "\n\n" + "-" * 20 + "\n\n" +
+                        "If the above context is not relevant, ignore it. "
+                        "If it is relevant, answer based on both the context and the prompt.\n\n"
+                        + "-" * 20 + "\n\n" +
+                        f"The prompt is:\n\n{prompt}"
+                )
+
+                # Use a local copy of the chat history (no session mutation)
+                conversation = st.session_state['my_chat_messages'] + [
+                    {"role": "user", "content": augmented_prompt}
+                ]
+
                 for chunk in st.session_state['client'].chat.completions.create(
-                        messages=st.session_state['my_chat_messages'],
+                        messages=conversation,
                         model=st.session_state['my_llm_model'],
                         stream=True,
-                        max_tokens=1024):
+                        max_tokens=1024,
+                ):
                     if chunk.choices[0].delta.content:
                         response += chunk.choices[0].delta.content
-                        # Use markdown to update the response placeholder with the streamed content
                         response_placeholder.markdown(response)
-                # Remove the last message from the chat messages in the session state
-                st.session_state['my_chat_messages'].pop()
             else:
-                augmented_prompt = ""
-                response = f"I do not have enough information to reply. The maximum similarity found in the context is: {100 * max_similarity:.2f}%."
+                response = (
+                    f"I do not have enough information to reply. "
+                    f"The maximum similarity found in the context is: {100 * max_similarity:.2f}%."
+                )
                 response_placeholder.markdown(response)
 
-        # Append the user's original prompt to the chat messages in the session state
+        # 💾 Store message history (safe & capped)
         st.session_state['my_chat_messages'].append({"role": "user", "content": prompt})
-        # Append the assistant's response to the chat messages in the session state
         st.session_state['my_chat_messages'].append({"role": "assistant", "content": response})
 
         if len(st.session_state['my_chat_messages']) > 10:
-            # Keep the first message which is the system instructions, remove the 2nd and 3rd messages which are the first user and assistant messages
-            st.session_state['my_chat_messages'] = st.session_state['my_chat_messages'][:1] + st.session_state[
-                'my_chat_messages'][3:]
+            st.session_state['my_chat_messages'] = (
+                    st.session_state['my_chat_messages'][:1] +
+                    st.session_state['my_chat_messages'][3:]
+            )
 
         with bottom_col2:
-            # Display the augmented prompt used for generating the response
             st.write("Augmented prompt:")
             st.json({"max_similarity": max_similarity, "augmented_prompt": augmented_prompt}, expanded=False)
-
-            # Display the chat messages history
             st.write("Messages History All:")
             st.json(st.session_state['my_chat_messages'], expanded=False)
-
-
