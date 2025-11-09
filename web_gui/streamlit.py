@@ -5,7 +5,6 @@ import re
 from huggingface_hub import InferenceClient
 import os
 import numpy as np
-from openai import OpenAI
 
 st.set_page_config(layout="wide")
 
@@ -37,25 +36,20 @@ my_initial_rag_text = "\n\n".join(
     f"--- {os.path.basename(path)} ---\n{text}" for path, text in rag_docs.items()
 )
 
-# Check if the LLM model is not already in the session state
+# Set the LLM model to meta-llama/Llama-3.1-8B-Instruct
 if "my_llm_model" not in st.session_state:
-    st.session_state['my_llm_model'] = "mistralai/Mistral-7B-Instruct-v0.3"
+    st.session_state['my_llm_model'] = "meta-llama/Llama-3.1-8B-Instruct"
 
 if "my_space" not in st.session_state:
     st.session_state['my_space'] = os.environ.get("SPACE_ID")
 
 
 def update_llm_model():
-    if st.session_state['my_llm_model'].startswith("gemini-"):
-        st.session_state['client'] = OpenAI(api_key=os.getenv("GOOGLE_API_KEY"),
-                                            base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
-    elif st.session_state['my_llm_model'].startswith("gpt-"):
-        st.session_state['client'] = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    """Initialize the InferenceClient for the Llama model"""
+    if st.session_state['my_space']:
+        st.session_state['client'] = InferenceClient(st.session_state['my_llm_model'])
     else:
-        if st.session_state['my_space']:
-            st.session_state['client'] = InferenceClient(st.session_state['my_llm_model'])
-        else:
-            st.session_state['client'] = InferenceClient(st.session_state['my_llm_model'], token=os.getenv("HF_TOKEN"))
+        st.session_state['client'] = InferenceClient(st.session_state['my_llm_model'], token=os.getenv("HF_TOKEN"))
 
 
 if "client" not in st.session_state:
@@ -197,17 +191,8 @@ The user agrees to indemnify and hold harmless the developers of the Software fr
 
 By using the Software, you agree to the terms and conditions of the disclaimer.""")
 
-    model_list_all = ['mistralai/Mistral-7B-Instruct-v0.3',
-                      'Qwen/Qwen2.5-72B-Instruct',
-                      'HuggingFaceH4/zephyr-7b-beta']
-    if os.getenv("GOOGLE_API_KEY"):
-        model_list_all.append('gemini-2.5-flash-preview-05-20')
-    if os.getenv("OPENAI_API_KEY"):
-        model_list_all.append('gpt-4.1-nano-2025-04-14')
-    st.selectbox("Select the model to use:",
-                 model_list_all,
-                 key="my_llm_model",
-                 on_change=update_llm_model)
+    # Model info display instead of selector
+    st.write("**Model:** meta-llama/Llama-3.1-8B-Instruct")
 
     st.text_area(label="Please enter your system instructions here:", value=my_system_instructions, height=80,
                  key="my_system_instructions", on_change=delete_chat_messages)
@@ -226,13 +211,6 @@ By using the Software, you agree to the terms and conditions of the disclaimer."
 
     st.slider("Number of original chunks to keep", min_value=1, max_value=50, value=20, step=1,
               key="nof_keep_sentences")
-
-    # Remove sub-prompt sliders since we're using full prompt now
-    # st.slider("Minimum number of words in sub prompt split", min_value=1, max_value=10, value=1, step=1,
-    #           key="nof_min_sub_prompts")
-    #
-    # st.slider("Maximum number of words in sub prompt split", min_value=1, max_value=10, value=5, step=1,
-    #           key="nof_max_sub_prompts")
 
 if "my_chat_messages" not in st.session_state:
     st.session_state['my_chat_messages'] = []
