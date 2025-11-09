@@ -58,7 +58,7 @@ if "client" not in st.session_state:
 if "embeddings_model" not in st.session_state:
     st.session_state['embeddings_model'] = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 
-my_system_instructions = "You are a helpful assistant that answers questions about the manga and tv-series one piece. Be brief and concise. Provide your answers in 100 words or less."
+my_system_instructions = "You are a helpful assistant that answers questions about a manga and tv-series. Be brief and concise. Provide your answers in 100 words or less."
 
 first_message = "Hello, how can I help you today?"
 
