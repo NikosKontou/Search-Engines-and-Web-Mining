@@ -1,5 +1,6 @@
 import re
 import nltk
+import wordninja_enhanced
 
 from nltk import pos_tag
 from nltk.corpus import wordnet, stopwords
@@ -288,3 +289,7 @@ class ScraperHelper():
         text = re.sub(r'[^\w\s]', '', str(text))  # Remove punctuation
         text = re.sub(r'\s+', ' ', text)  # Collapse multiple spaces
         return text.strip()
+
+    def smart_respace(self, text):
+        words = wordninja_enhanced.split(text)
+        return " ".join(words)

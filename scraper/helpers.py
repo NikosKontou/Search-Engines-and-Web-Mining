@@ -154,6 +154,7 @@ def write_data(file_path: str, text: str, scraper_helper: ScraperHelper)-> None:
     :param scraper_helper: ScraperHelper object
     :return: nothing
     """
+    text = scraper_helper.smart_respace(text=text)
     text = scraper_helper.lowercase_text(text=text)
     text = scraper_helper.replace_urls(text=text)
     text = scraper_helper.remove_and_print(text = text)
@@ -163,7 +164,7 @@ def write_data(file_path: str, text: str, scraper_helper: ScraperHelper)-> None:
     text = scraper_helper.remove_short_words(text=text)
     text = scraper_helper.remove_stopwords(text=text)
     # maybe we shouldn't lematize because transformers will take care of it?'
-    # text = scraper_helper.lemmatize_text(text=text)
+    text = scraper_helper.lemmatize_text(text=text)
     text = scraper_helper.remove_punctuation(text=text)
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(text)
