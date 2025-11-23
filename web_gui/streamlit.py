@@ -62,17 +62,33 @@ my_system_instructions = "You are a helpful assistant that answers questions abo
 
 first_message = "Hello, how can I help you today?"
 
-
+# NOTE: The chat delete function and RAG creation logic use keys for the removed sliders and text areas.
+# I'll keep them for completeness, but they won't affect the UI as the widgets are removed.
 def delete_chat_messages():
     for key in list(st.session_state.keys()):
         if key not in ["my_rag_text", "my_system_instructions", "my_llm_model", "my_space", "client",
                        "embeddings_model",
-                       "my_sentences_rag", "my_sentences_rag_ids", "my_doc_ids", "my_sentences", "my_embeddings"]:
+                       "my_sentences_rag", "my_sentences_rag_ids", "my_doc_ids", "my_sentences", "my_embeddings",
+                       "min_window_size", "max_window_size", "my_similarity_threshold", "nof_keep_sentences"]: # Added necessary keys
             del st.session_state[key]
     update_llm_model()
 
+# Placeholders for removed UI elements' default values
+if "min_window_size" not in st.session_state:
+    st.session_state["min_window_size"] = 5
+if "max_window_size" not in st.session_state:
+    st.session_state["max_window_size"] = 10
+if "my_similarity_threshold" not in st.session_state:
+    st.session_state["my_similarity_threshold"] = 0.2
+if "nof_keep_sentences" not in st.session_state:
+    st.session_state["nof_keep_sentences"] = 20
+if "my_rag_text" not in st.session_state:
+    st.session_state["my_rag_text"] = my_initial_rag_text
+
 
 def create_sentences_rag():
+    # Use st.empty() for rag_status_placeholder even though it won't be visible in the final requested UI
+    rag_status_placeholder = st.empty()
     with rag_status_placeholder:
         st.info("Processing RAG documents...")
         pattern = r'(?<=[.?!;:])\s+|\n'
@@ -177,11 +193,10 @@ def find_most_similar_chunks(prompt):
     }
 
 
-# Create two columns with a 1:2 ratio
-column_1, column_2 = st.columns([1, 2])
+# --- START OF MODIFIED UI ---
 
-with column_1:
-    st.expander("Disclaimer", expanded=False).markdown("""This application and code (hereafter referred to as the 'Software') is a proof of concept at an experimental stage and is not intended to be used as a production environment. The Software is provided as is, wihtout any warranties of any kind, expressed or implied and the user assumes full responsibility for its use, implementation, and legal compliance.
+# 1. Disclaimer dropdown
+st.expander("Disclaimer", expanded=False).markdown("""This application and code (hereafter referred to as the 'Software') is a proof of concept at an experimental stage and is not intended to be used as a production environment. The Software is provided as is, wihtout any warranties of any kind, expressed or implied and the user assumes full responsibility for its use, implementation, and legal compliance.
 
 The developers of the Software shall not be liable for any damages, losses, claims, or liabilities arising from the Software, including but not limited to the usage of artificial intelligence and machine learning, related errors, third-party tool failures, security breaches, intellectual property violations, legal or regulatory non-compliance, deployment risks, or any indirect, incidental, or consequential damages.
 
@@ -191,138 +206,106 @@ The user agrees to indemnify and hold harmless the developers of the Software fr
 
 By using the Software, you agree to the terms and conditions of the disclaimer.""")
 
-    # Model info display instead of selector
-    st.write("**Model:** meta-llama/Llama-3.1-8B-Instruct")
-
-    st.text_area(label="Please enter your system instructions here:", value=my_system_instructions, height=80,
-                 key="my_system_instructions", on_change=delete_chat_messages)
-
-    rag_status_placeholder = st.empty()
-    st.text_area(label="Please enter your RAG text here:", value=my_initial_rag_text, height=200, key="my_rag_text",
-                 on_change=delete_chat_messages)
-
-    st.slider("Minimum window size in original sentences", min_value=1, max_value=20, value=5, step=1,
-              key="min_window_size", on_change=create_sentences_rag)
-
-    st.slider("Maximum window size in original sentences", min_value=1, max_value=20, value=10, step=1,
-              key="max_window_size", on_change=create_sentences_rag)
-
-    st.slider("Similarity threshold", min_value=0.0, max_value=1.0, value=0.2, step=0.01, key="my_similarity_threshold")
-
-    st.slider("Number of original chunks to keep", min_value=1, max_value=50, value=20, step=1,
-              key="nof_keep_sentences")
-
+# Initialize chat messages and RAG data if needed
 if "my_chat_messages" not in st.session_state:
     st.session_state['my_chat_messages'] = []
     st.session_state['my_chat_messages'].append(
-        {"role": "system", "content": st.session_state['my_system_instructions']})
+        {"role": "system", "content": my_system_instructions})
 
 if "my_sentences_rag" not in st.session_state:
     create_sentences_rag()
 
-with column_2:
-    messages_container = st.container(height=500)
+# 2. Chat box
+messages_container = st.container(height=500)
 
-    messages_container.chat_message("ai", avatar=":material/robot_2:").markdown(first_message)
+messages_container.chat_message("ai", avatar=":material/robot_2:").markdown(first_message)
 
-    for message in st.session_state['my_chat_messages']:
-        if message['role'] == "user":
-            messages_container.chat_message(message['role'], avatar=":material/psychology_alt:").markdown(
-                message['content'])
-        elif message['role'] == "assistant":
-            messages_container.chat_message(message['role'], avatar=":material/robot_2:").markdown(message['content'])
+for message in st.session_state['my_chat_messages']:
+    if message['role'] == "user":
+        messages_container.chat_message(message['role'], avatar=":material/psychology_alt:").markdown(
+            message['content'])
+    elif message['role'] == "assistant":
+        messages_container.chat_message(message['role'], avatar=":material/robot_2:").markdown(message['content'])
 
-    if prompt := st.chat_input("you may ask here your questions"):
-        # Add user message immediately
-        messages_container.chat_message("user", avatar=":material/psychology_alt:").markdown(prompt)
+if prompt := st.chat_input("you may ask here your questions"):
+    # Add user message immediately
+    messages_container.chat_message("user", avatar=":material/psychology_alt:").markdown(prompt)
 
-        with messages_container.chat_message("ai", avatar=":material/robot_2:"):
-            response_placeholder = st.empty()
+    with messages_container.chat_message("ai", avatar=":material/robot_2:"):
+        response_placeholder = st.empty()
 
-            # Show that we're processing
-            response_placeholder.info("Searching for relevant information...")
+        # Show that we're processing
+        response_placeholder.info("Searching for relevant information...")
 
-            # Recalculate similarities for EVERY new prompt
-            similarity_results = find_most_similar_chunks(prompt)
+        # Recalculate similarities for EVERY new prompt
+        similarity_results = find_most_similar_chunks(prompt)
 
-            selected_chunk_indices = similarity_results['selected_chunk_indices']
-            selected_sentence_indices = similarity_results['selected_sentence_indices']
-            similarities = similarity_results['similarities']
-            max_similarity = similarity_results['max_similarity']
+        selected_chunk_indices = similarity_results['selected_chunk_indices']
+        selected_sentence_indices = similarity_results['selected_sentence_indices']
+        similarities = similarity_results['similarities']
+        max_similarity = similarity_results['max_similarity']
 
-            # Create bottom columns for displaying results
-            bottom_col1, bottom_col2 = st.columns([1, 1])
+        # --- BEGIN: Removed retrieval preview and chunk details (bottom_col1) ---
+        # The logic to generate 'response' still relies on these variables
+        # so they must be calculated above, but the display is removed here.
+        # --- END: Removed retrieval preview and chunk details ---
 
-            with bottom_col1:
-                st.write(f"**Top matching chunks for:** '{prompt}'")
-                st.write(f"Max similarity: {max_similarity:.4f}")
+        # Generate response
+        if max_similarity > st.session_state['my_similarity_threshold'] and selected_sentence_indices:
+            # Clear the processing message
+            response_placeholder.empty()
 
-                if selected_chunk_indices:
-                    for i, chunk_idx in enumerate(selected_chunk_indices[:8]):  # Show more chunks
-                        doc_source = os.path.basename(st.session_state['my_doc_ids'][chunk_idx])
-                        similarity_score = similarities[chunk_idx]
-                        str_conf = (
-                            f"Score: {similarity_score:.4f} "
-                            f"(Source: {doc_source})"
-                        )
-                        with st.expander(f"Chunk {i + 1}: {str_conf}"):
-                            chunk_text = st.session_state['my_sentences_rag'][chunk_idx]
-                            st.write(f"**Chunk text:** {chunk_text[:200]}..." if len(
-                                chunk_text) > 200 else f"**Chunk text:** {chunk_text}")
-                            st.write(f"**Sentences used:** {len(st.session_state['my_sentences_rag_ids'][chunk_idx])}")
-                else:
-                    st.warning("No chunks found!")
+            augmented_prompt = "Context information:\n\n"
+            context_text = "\n".join([st.session_state['my_sentences'][idx] for idx in selected_sentence_indices])
+            augmented_prompt += context_text
+            augmented_prompt += "\n\nBased on the above context, answer this question: " + prompt
+            augmented_prompt += "\nIf the context doesn't contain relevant information, say you don't know based on the available information."
 
-            # Generate response
-            if max_similarity > st.session_state['my_similarity_threshold'] and selected_sentence_indices:
-                # Clear the processing message
-                response_placeholder.empty()
+            temp_messages = st.session_state['my_chat_messages'] + [{"role": "user", "content": augmented_prompt}]
 
-                augmented_prompt = "Context information:\n\n"
-                context_text = "\n".join([st.session_state['my_sentences'][idx] for idx in selected_sentence_indices])
-                augmented_prompt += context_text
-                augmented_prompt += "\n\nBased on the above context, answer this question: " + prompt
-                augmented_prompt += "\nIf the context doesn't contain relevant information, say you don't know based on the available information."
-
-                temp_messages = st.session_state['my_chat_messages'] + [{"role": "user", "content": augmented_prompt}]
-
-                response = ""
-                try:
-                    for chunk in st.session_state['client'].chat.completions.create(
-                            messages=temp_messages,
-                            model=st.session_state['my_llm_model'],
-                            stream=True,
-                            max_tokens=1024):
-                        if chunk.choices[0].delta.content:
-                            response += chunk.choices[0].delta.content
-                            response_placeholder.markdown(response)
-                except Exception as e:
-                    response = f"Error generating response: {str(e)}"
-                    response_placeholder.markdown(response)
-            else:
-                response = f"I don't have enough relevant information to answer this question. The best match has {100 * max_similarity:.2f}% similarity, which is below the threshold of {100 * st.session_state['my_similarity_threshold']:.2f}%."
+            response = ""
+            try:
+                for chunk in st.session_state['client'].chat.completions.create(
+                        messages=temp_messages,
+                        model=st.session_state['my_llm_model'],
+                        stream=True,
+                        max_tokens=1024):
+                    if chunk.choices[0].delta.content:
+                        response += chunk.choices[0].delta.content
+                        response_placeholder.markdown(response)
+            except Exception as e:
+                response = f"Error generating response: {str(e)}"
                 response_placeholder.markdown(response)
+        else:
+            response = f"I don't have enough relevant information to answer this question. The best match has {100 * max_similarity:.2f}% similarity, which is below the threshold of {100 * st.session_state['my_similarity_threshold']:.2f}%."
+            response_placeholder.markdown(response)
 
-        # Store conversation
-        st.session_state['my_chat_messages'].append({"role": "user", "content": prompt})
-        st.session_state['my_chat_messages'].append({"role": "assistant", "content": response})
+    # Store conversation
+    st.session_state['my_chat_messages'].append({"role": "user", "content": prompt})
+    st.session_state['my_chat_messages'].append({"role": "assistant", "content": response})
 
-        # Limit chat history
-        if len(st.session_state['my_chat_messages']) > 10:
-            st.session_state['my_chat_messages'] = [st.session_state['my_chat_messages'][0]] + st.session_state[
-                'my_chat_messages'][-8:]
+    # Limit chat history
+    if len(st.session_state['my_chat_messages']) > 10:
+        st.session_state['my_chat_messages'] = [st.session_state['my_chat_messages'][0]] + st.session_state[
+            'my_chat_messages'][-8:]
 
-        with bottom_col2:
-            st.write("**Retrieval Information:**")
-            retrieval_info = {
-                "query": prompt,
-                "max_similarity": float(max_similarity),
-                "threshold": float(st.session_state['my_similarity_threshold']),
-                "chunks_retrieved": len(selected_chunk_indices),
-                "sentences_used": len(selected_sentence_indices),
-                "total_chunks_available": len(st.session_state['my_sentences_rag'])
-            }
-            st.json(retrieval_info, expanded=True)
 
-            st.write("**Recent Chat History:**")
-            st.json(st.session_state['my_chat_messages'][-4:], expanded=False)
+    # 1. Get a list of unique document file names (sources) for the retrieved chunks
+    retrieved_doc_paths = [st.session_state['my_doc_ids'][i] for i in selected_chunk_indices]
+    unique_doc_names = sorted(list(set(os.path.basename(path) for path in retrieved_doc_paths)))
+
+    # 2. Create the retrieval info dictionary
+    retrieval_info = {
+        "query": prompt,
+        "max_similarity": float(max_similarity),
+        "threshold": float(st.session_state['my_similarity_threshold']),
+        "chunks_retrieved": len(selected_chunk_indices),
+        "sentences_used": len(selected_sentence_indices),
+        "total_chunks_available": len(st.session_state['my_sentences_rag']),
+        "similar_documents_found": unique_doc_names  # ADDED: List of unique document names
+    }
+
+    # 3. Display the Retrieval Information
+    with st.expander("Retrieval Info"): # Display under the chat for a single column layout
+        st.write("**Retrieval Information for Current Query:**")
+        st.json(retrieval_info, expanded=True)
