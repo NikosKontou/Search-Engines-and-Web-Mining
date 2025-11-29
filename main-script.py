@@ -25,7 +25,8 @@ def get_corpus(scraper_helper):
 
         # Extract all paragraph texts inside the content div
         paragraphs = content_div.find_all('p')
-        page_text = '\n\n'.join(p.get_text() for p in paragraphs)
+        page_text = '\n\n'.join(p.get_text(separator=" ") for p in paragraphs)
+        page_text = re.sub(r'\s+', ' ', page_text).strip()
 
     else:
         print(f"Failed to retrieve the page. Status code: {response.status_code}")
@@ -62,7 +63,8 @@ def get_corpus(scraper_helper):
     directory = "corpus"
     ensure_directory_exists(directory)
 
-    for child_url in list(valid_links):
+    for i, child_url in enumerate(list(valid_links)):
+
         print(f"\nscraping {child_url}")
         page_data = scrape_wiki_page(child_url)
 
@@ -89,4 +91,4 @@ def get_corpus(scraper_helper):
 
 
 scraper_helper= ScraperHelper()
-# get_corpus(scraper_helper=scraper_helper)
+get_corpus(scraper_helper=scraper_helper)
