@@ -4,7 +4,7 @@ from typing import List, Dict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel  # cosine similarity for normalized TF-IDF
 
-CORPUS_DIR = "../corpus"
+CORPUS_DIR = "../corpus_tf"
 
 class SimpleSearchEngine:
     def __init__(self, corpus_dir: str = CORPUS_DIR):

@@ -60,8 +60,11 @@ def get_corpus(scraper_helper):
 
     print(f"Found {len(valid_links)} valid child links.")
 
-    directory = "corpus"
-    ensure_directory_exists(directory)
+    directory_tf = "corpus_tf"
+    ensure_directory_exists(directory_tf)
+
+    directory_transformers = "corpus_transformers"
+    ensure_directory_exists(directory_transformers)
 
     for i, child_url in enumerate(list(valid_links)):
 
@@ -73,21 +76,28 @@ def get_corpus(scraper_helper):
 
         # create a directory for this wiki page
         dir_name = url_to_filename(child_url, max_length=80)
-        dir_path = os.path.join("corpus", dir_name)
-        os.makedirs(dir_path, exist_ok=True)
+        dir_path_transform = os.path.join("corpus_transform", dir_name)
+        dir_path_tf = os.path.join("corpus_tf", dir_name)
+        os.makedirs(dir_path_transform, exist_ok=True)
+        os.makedirs(dir_path_tf, exist_ok=True)
 
         # if the page returned regular text (no episodes)
         if isinstance(page_data, str):
-            file_path = os.path.join(dir_path, f"{dir_name}.txt")
-            write_data(file_path=file_path, text=page_data,
-                       scraper_helper=scraper_helper)
+            file_path_tf = os.path.join(dir_path_tf, f"{dir_name}.txt")
+            write_data(file_path=file_path_tf, text=page_data,
+                       scraper_helper=scraper_helper, transformers=False)
+            file_path_transform = os.path.join(dir_path_transform, f"{dir_name}.txt")
+            write_data(file_path=file_path_transform, text=page_data,
+                       scraper_helper=scraper_helper, transformers=True)
             continue
 
         # if the page returned episode data (list of tuples)
         for title, text in page_data:
             filename = safe_filename(title)
-            file_path = os.path.join(dir_path, f"{filename}.txt")
-            write_data(file_path=file_path, text=text, scraper_helper=scraper_helper)
+            file_path = os.path.join(dir_path_tf, f"{filename}.txt")
+            write_data(file_path=file_path, text=text, scraper_helper=scraper_helper, transformers=False)
+            file_path = os.path.join(dir_path_transform, f"{filename}.txt")
+            write_data(file_path=file_path, text=text, scraper_helper=scraper_helper, transformers=True)
 
 
 scraper_helper= ScraperHelper()

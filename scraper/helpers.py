@@ -146,25 +146,27 @@ def url_to_filename(url, max_length=255):
 
     return safe_base
 
-def write_data(file_path: str, text: str, scraper_helper: ScraperHelper)-> None:
+def write_data(file_path: str, text: str, scraper_helper: ScraperHelper, transformers: bool)-> None:
     """
     a simple wrapper for data cleaning per file
     :param file_path: name of the file
     :param text: the document's content
     :param scraper_helper: ScraperHelper object
+    :param transformers: if the document is intended for use by transformers
     :return: nothing
     """
     text = scraper_helper.smart_respace(text=text)
-    text = scraper_helper.lowercase_text(text=text)
-    text = scraper_helper.replace_urls(text=text)
-    text = scraper_helper.remove_and_print(text = text)
-    text = scraper_helper.replace_usernames(text = text)
-    text = scraper_helper.clean_text(text = text)
-    text = scraper_helper.remove_consecutive_letters(text = text)
-    text = scraper_helper.remove_short_words(text=text)
-    text = scraper_helper.remove_stopwords(text=text)
-    # maybe we shouldn't lematize because transformers will take care of it?'
-    text = scraper_helper.lemmatize_text(text=text)
-    text = scraper_helper.remove_punctuation(text=text)
+    if not transformers:
+        text = scraper_helper.lowercase_text(text=text)
+        text = scraper_helper.replace_urls(text=text)
+        text = scraper_helper.remove_and_print(text = text)
+        text = scraper_helper.replace_usernames(text = text)
+        text = scraper_helper.clean_text(text = text)
+        text = scraper_helper.remove_consecutive_letters(text = text)
+        text = scraper_helper.remove_short_words(text=text)
+        text = scraper_helper.remove_stopwords(text=text)
+        # maybe we shouldn't lematize because transformers will take care of it?'
+        text = scraper_helper.lemmatize_text(text=text)
+        text = scraper_helper.remove_punctuation(text=text)
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(text)

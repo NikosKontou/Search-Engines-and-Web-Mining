@@ -1,6 +1,6 @@
 import re
 import nltk
-import wordninja_enhanced
+import wordninja
 
 from nltk import pos_tag
 from nltk.corpus import wordnet, stopwords
@@ -291,5 +291,5 @@ class ScraperHelper():
         return text.strip()
 
     def smart_respace(self, text):
-        words = wordninja_enhanced.split(text)
+        words = wordninja.split(text)
         return " ".join(words)
