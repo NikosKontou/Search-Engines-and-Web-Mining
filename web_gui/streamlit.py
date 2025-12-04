@@ -182,38 +182,34 @@ def find_most_similar_chunks(prompt):
 
 
 def generate_hypothetical_answer(prompt):
-    """Generate a hypothetical answer using the LLM with robust stream handling"""
-    hyde_system_instructions = (
-        "You are a helpful assistant that generates a hypothetical answer to the "
-        "user's question. This answer will be used for semantic search. "
-        "Be brief, precise, and factual. Provide your answer in 100 words or less."
-    )
-
-    hyde_messages = [
-        {"role": "system", "content": hyde_system_instructions},
-        {"role": "user", "content": prompt}
-    ]
+    """Generate a hypothetical answer using the LLM"""
+    hyde_system_instructions = "You are a helpful assistant that generates a hypothetical answer to the user's question. Be brief and concise. Provide your answer in 100 words or less."
 
     try:
-        stream = st.session_state['client'].chat.completions.create(
-            messages=hyde_messages,
-            model=st.session_state['my_llm_model'],
-            stream=True,
-            max_tokens=512,
-            temperature=0.7  # Slight creativity helps HyDE
-        )
+        hyde_messages = [
+            {"role": "system", "content": hyde_system_instructions},
+            {"role": "user", "content": prompt}
+        ]
 
         hypothetical_answer = ""
-        for chunk in stream:
-            # Standard HuggingFace/OpenAI stream structure check
-            if chunk.choices and chunk.choices[0].delta.content:
-                hypothetical_answer += chunk.choices[0].delta.content
+        for packet in st.session_state['client'].chat.completions.create(
+                messages=hyde_messages,
+                model=st.session_state['my_llm_model'],
+                stream=True,
+                max_tokens=512):
+            choice = getattr(packet, "choices", None)
+            if not choice:
+                continue
+            first_choice = choice[0]
+            delta = getattr(first_choice, "delta", None)
+            content_piece = getattr(delta, "content", None)
+            if not content_piece:
+                continue
+            hypothetical_answer += content_piece
 
         return hypothetical_answer.strip()
     except Exception as e:
-        # Return None so we can handle the error specifically in the UI
-        print(f"HyDE Generation Error: {e}")
-        return None
+        return f"Error generating hypothetical answer: {str(e)}"
 
 
 def generate_response_with_retrieved_docs(prompt, selected_sentence_indices, retrieval_info=None):
@@ -342,58 +338,36 @@ if prompt := st.chat_input("you may ask here your questions"):
             st.session_state["current_standard_response"] = standard_response
 
     # HyDE Response (right column)
-        # HyDE Response (right column)
-        with col2:
-            with st.spinner("Generating HyDE response..."):
-                st.markdown("### HyDE Response")
+    with col2:
+        with st.spinner("Generating HyDE response..."):
+            st.markdown("### HyDE Response")
 
-                # Step 1: Generate hypothetical answer
-                hypothetical_answer = generate_hypothetical_answer(prompt)
+            # Step 1: Generate hypothetical answer
+            hypothetical_answer = generate_hypothetical_answer(prompt)
 
-                # Error Handling: If generation failed or returned empty
-                if not hypothetical_answer:
-                    hyde_response = "⚠️ Error: Could not generate a hypothetical answer. The model might be busy or the context was blocked."
-                    st.error(hyde_response)
-                    # Set defaults to prevent crash
-                    hyde_max_similarity = 0.0
-                    hyde_selected_chunk_indices = []
-                    hyde_selected_sentence_indices = []
-                    hyde_unique_doc_names = []
-                else:
-                    # Step 2: Use hypothetical answer to find similar documents
-                    hyde_similarity_results = find_most_similar_chunks(hypothetical_answer)
-                    hyde_selected_sentence_indices = hyde_similarity_results['selected_sentence_indices']
-                    hyde_max_similarity = hyde_similarity_results['max_similarity']
-                    hyde_selected_chunk_indices = hyde_similarity_results['selected_chunk_indices']
+            # Step 2: Use hypothetical answer to find similar documents
+            hyde_similarity_results = find_most_similar_chunks(hypothetical_answer)
+            hyde_selected_sentence_indices = hyde_similarity_results['selected_sentence_indices']
+            hyde_max_similarity = hyde_similarity_results['max_similarity']
+            hyde_selected_chunk_indices = hyde_similarity_results['selected_chunk_indices']
 
-                    # Step 3: Generate final answer using retrieved documents
-                    if hyde_max_similarity > float(
-                            st.session_state['my_similarity_threshold']) and hyde_selected_sentence_indices:
-                        hyde_response, _ = generate_response_with_retrieved_docs(prompt, hyde_selected_sentence_indices)
-                        st.markdown(hyde_response)
+            # Step 3: Generate final answer using retrieved documents
+            if hyde_max_similarity > float(
+                    st.session_state['my_similarity_threshold']) and hyde_selected_sentence_indices:
+                hyde_response, _ = generate_response_with_retrieved_docs(prompt, hyde_selected_sentence_indices)
+                st.markdown(hyde_response)
 
-                        # Store retrieval info for HyDE
-                        hyde_retrieved_doc_paths = []
-                        for i in hyde_selected_chunk_indices:
-                            if i < len(st.session_state.get('my_doc_ids', [])):
-                                hyde_retrieved_doc_paths.append(st.session_state['my_doc_ids'][i])
-                        hyde_unique_doc_names = sorted(list({os.path.basename(p) for p in hyde_retrieved_doc_paths}))
+                # Store retrieval info for HyDE
+                hyde_retrieved_doc_paths = []
+                for i in hyde_selected_chunk_indices:
+                    if i < len(st.session_state.get('my_doc_ids', [])):
+                        hyde_retrieved_doc_paths.append(st.session_state['my_doc_ids'][i])
+                hyde_unique_doc_names = sorted(list({os.path.basename(p) for p in hyde_retrieved_doc_paths}))
 
-                    else:
-                        hyde_response = (
-                            f"HyDE couldn't find relevant information. "
-                            f"The hypothetical answer had {100 * float(hyde_max_similarity):.2f}% similarity, which is below the threshold of "
-                            f"{100 * float(st.session_state['my_similarity_threshold']):.2f}%."
-                        )
-                        st.markdown(hyde_response)
-                        # Initialize list for the info object below
-                        hyde_unique_doc_names = []
-
-                # Create retrieval info object
                 hyde_retrieval_info = {
                     "query": prompt,
-                    "hypothetical_answer": (hypothetical_answer[:500] + "...") if hypothetical_answer and len(
-                        hypothetical_answer) > 500 else (hypothetical_answer or "N/A"),
+                    "hypothetical_answer": hypothetical_answer[:500] + "..." if len(
+                        hypothetical_answer) > 500 else hypothetical_answer,
                     "max_similarity": float(hyde_max_similarity),
                     "threshold": float(st.session_state['my_similarity_threshold']),
                     "chunks_retrieved": len(hyde_selected_chunk_indices),
@@ -401,9 +375,24 @@ if prompt := st.chat_input("you may ask here your questions"):
                     "similar_documents_found": hyde_unique_doc_names,
                     "method": "hyde"
                 }
+            else:
+                hyde_response = (
+                    f"HyDE couldn't find relevant information. "
+                    f"The hypothetical answer had {100 * float(hyde_max_similarity):.2f}% similarity, which is below the threshold of "
+                    f"{100 * float(st.session_state['my_similarity_threshold']):.2f}%."
+                )
+                st.markdown(hyde_response)
+                hyde_retrieval_info = {
+                    "method": "hyde",
+                    "hypothetical_answer": hypothetical_answer[:500] + "..." if len(
+                        hypothetical_answer) > 500 else hypothetical_answer,
+                    "max_similarity": float(hyde_max_similarity),
+                    "threshold": float(st.session_state['my_similarity_threshold']),
+                    "status": "below_threshold"
+                }
 
-                # Store the HyDE response in session state
-                st.session_state["current_hyde_response"] = hyde_response
+            # Store the HyDE response in session state
+            st.session_state["current_hyde_response"] = hyde_response
 
     # Store both responses for comparison
     st.session_state["current_responses"] = {
