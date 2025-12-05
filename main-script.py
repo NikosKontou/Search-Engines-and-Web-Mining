@@ -156,9 +156,6 @@ def get_corpus(scraper_helper):
     ensure_directory_exists(corpus_root)
 
     for i, child_url in enumerate(list(valid_links)):
-        if i > 10:
-            break
-        print(f"Scraping {child_url}")
         page_data = scrape_wiki_page(child_url)
 
         if not page_data:
