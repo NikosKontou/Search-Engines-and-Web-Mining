@@ -2,16 +2,40 @@ import os
 import re
 import numpy as np
 import streamlit as st
+from typing import List, Dict, Any, Tuple, Set, Optional
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from huggingface_hub import InferenceClient
 
-st.set_page_config(layout="wide")
+# --- Configuration & Constants ---
+PAGE_TITLE = "Manga & TV Assistant"
+DATA_DIRECTORY = "/Top/ACG/Year_2/timester 1/search engines/Search-Engines-and-Web-Mining/corpus_transform"
+DEFAULT_LLM_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+# System Instructions
+SYSTEM_PROMPT = (
+    "You are a helpful assistant that answers questions about a manga and tv-series. "
+    "Be brief and concise. Provide your answers in 100 words or less."
+)
+HYDE_SYSTEM_PROMPT = (
+    "You are a helpful assistant that generates a hypothetical answer to the user's question. "
+    "Be brief and concise. Provide your answer in 100 words or less."
+)
+
+st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 
 
-def load_texts_from_directory(base_dir: str) -> dict:
+# --- Helper Functions: Data Loading & Processing ---
+
+def load_texts_from_directory(base_dir: str) -> Dict[str, str]:
+    """Recursively loads text files from a directory."""
     texts = {}
-    print(f"current directory is {base_dir}")
+    if not os.path.exists(base_dir):
+        st.error(f"Directory not found: {base_dir}")
+        return texts
+
+    print(f"Scanning directory: {base_dir}")
     for root, _, files in os.walk(base_dir):
         for file in files:
             if file.lower().endswith(".txt"):
@@ -26,462 +50,386 @@ def load_texts_from_directory(base_dir: str) -> dict:
     return texts
 
 
-# load RAG documents
-my_data_dir = "/Top/ACG/Year_2/timester 1/search engines/Search-Engines-and-Web-Mining/corpus_transform"
-rag_docs = load_texts_from_directory(my_data_dir)
-
-# combine for UI preview
-my_initial_rag_text = "\n\n".join(
-    f"--- {os.path.basename(path)} ---\n{text}" for path, text in rag_docs.items()
-)
-
-# session defaults
-st.session_state.setdefault('my_llm_model', "meta-llama/Llama-3.1-8B-Instruct")
-st.session_state.setdefault('my_space', os.environ.get("SPACE_ID"))
+def split_text_into_sentences(text: str) -> List[str]:
+    """Splits text into sentences using regex."""
+    pattern = r'(?<=[.?!;:])\s+|\n'
+    return [s.strip() for s in re.split(pattern, text) if s.strip()]
 
 
-def update_llm_model():
-    token = None if st.session_state.get('my_space') else os.getenv("HF_TOKEN")
-    st.session_state['client'] = InferenceClient(st.session_state['my_llm_model'], token=token)
+def create_rolling_chunks(sentences: List[str], min_window: int, max_window: int, start_idx: int) -> Tuple[
+    List[str], List[List[int]]]:
+    """Creates text chunks using a rolling window approach."""
+    doc_chunks = []
+    doc_chunk_ids = []
+
+    n_sentences = len(sentences)
+    # Handle very short documents
+    if n_sentences < min_window:
+        chunk = " ".join(sentences)
+        doc_chunks.append(chunk)
+        doc_chunk_ids.append(list(range(start_idx, start_idx + n_sentences)))
+        return doc_chunks, doc_chunk_ids
+
+    actual_max = min(max_window, n_sentences)
+    actual_min = min(min_window, actual_max)
+
+    for window_size in range(actual_min, actual_max + 1):
+        for i in range(n_sentences - window_size + 1):
+            chunk = " ".join(sentences[i: i + window_size]).strip()
+            if chunk:
+                doc_chunks.append(chunk)
+                global_indices = list(range(start_idx + i, start_idx + i + window_size))
+                doc_chunk_ids.append(global_indices)
+
+    return doc_chunks, doc_chunk_ids
 
 
-if "client" not in st.session_state:
-    update_llm_model()
+# --- Core Logic: Embeddings & Search ---
 
-st.session_state.setdefault('embeddings_model', SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'))
+def process_documents_and_embed():
+    """Processes loaded documents, chunks them, and generates embeddings."""
+    if 'rag_docs' not in st.session_state or not st.session_state['rag_docs']:
+        st.warning("No documents loaded.")
+        return
 
-my_system_instructions = "You are a helpful assistant that answers questions about a manga and tv-series. Be brief and concise. Provide your answers in 100 words or less."
-first_message = "Hello, how can I help you today?"
+    with st.spinner("Processing RAG documents..."):
+        all_sentences = []
+        all_chunks = []
+        all_chunk_ids = []  # List of list of sentence indices
+        doc_path_map = []  # Maps chunk index to document path
 
-
-def delete_chat_messages():
-    keep = {
-        "my_rag_text", "my_system_instructions", "my_llm_model", "my_space", "client",
-        "embeddings_model", "my_sentences_rag", "my_sentences_rag_ids", "my_doc_ids",
-        "my_sentences", "my_embeddings", "min_window_size", "max_window_size",
-        "my_similarity_threshold", "nof_keep_sentences", "hyde_responses",
-        "current_responses", "current_standard_response", "current_hyde_response"
-    }
-    for key in list(st.session_state.keys()):
-        if key not in keep:
-            del st.session_state[key]
-    update_llm_model()
-
-
-# placeholders / defaults for UI values removed earlier
-st.session_state.setdefault("min_window_size", 5)
-st.session_state.setdefault("max_window_size", 10)
-st.session_state.setdefault("my_similarity_threshold", 0.2)
-st.session_state.setdefault("nof_keep_sentences", 20)
-st.session_state.setdefault("my_rag_text", my_initial_rag_text)
-st.session_state.setdefault("hyde_responses", [])
-st.session_state.setdefault("current_responses", {})
-st.session_state.setdefault("current_standard_response", "")
-st.session_state.setdefault("current_hyde_response", "")
-
-
-def create_sentences_rag():
-    rag_status_placeholder = st.empty()
-    with rag_status_placeholder:
-        st.info("Processing RAG documents...")
-        pattern = r'(?<=[.?!;:])\s+|\n'
-
-        st.session_state['my_sentences_rag'] = []
-        st.session_state['my_sentences_rag_ids'] = []
-        st.session_state['my_doc_ids'] = []
-        st.session_state['my_sentences'] = []
-        st.session_state['my_embeddings'] = None
-
-        all_embeddings = []
-
-        for doc_path, doc_text in rag_docs.items():
-            sentences = [s.strip() for s in re.split(pattern, doc_text) if s.strip()]
+        # 1. Process Text
+        for doc_path, doc_text in st.session_state['rag_docs'].items():
+            sentences = split_text_into_sentences(doc_text)
             if not sentences:
                 continue
 
-            doc_sentence_start_idx = len(st.session_state['my_sentences'])
-            st.session_state['my_sentences'].extend(sentences)
+            current_sentence_idx = len(all_sentences)
+            all_sentences.extend(sentences)
 
-            max_window = min(st.session_state['max_window_size'], len(sentences))
-            min_window = min(st.session_state['min_window_size'], max_window)
+            chunks, chunk_ids = create_rolling_chunks(
+                sentences,
+                st.session_state['min_window_size'],
+                st.session_state['max_window_size'],
+                current_sentence_idx
+            )
 
-            doc_chunks = []
-            doc_chunk_ids = []
+            all_chunks.extend(chunks)
+            all_chunk_ids.extend(chunk_ids)
+            doc_path_map.extend([doc_path] * len(chunks))
 
-            for rolling_window_size in range(min_window, max_window + 1):
-                if rolling_window_size > len(sentences):
-                    continue
-                for i in range(0, len(sentences) - rolling_window_size + 1):
-                    chunk = " ".join(sentences[i:i + rolling_window_size]).strip()
-                    if chunk:
-                        doc_chunks.append(chunk)
-                        global_indices = list(range(doc_sentence_start_idx + i,
-                                                    doc_sentence_start_idx + i + rolling_window_size))
-                        doc_chunk_ids.append(global_indices)
-                        st.session_state['my_doc_ids'].append(doc_path)
+        # 2. Generate Embeddings
+        if all_chunks:
+            model = st.session_state['embeddings_model']
+            embeddings = model.encode(all_chunks)
 
-            # handle very short docs
-            if not doc_chunks and sentences:
-                short_chunk = " ".join(sentences)
-                doc_chunks = [short_chunk]
-                global_indices = list(range(doc_sentence_start_idx, doc_sentence_start_idx + len(sentences)))
-                doc_chunk_ids.append(global_indices)
-                st.session_state['my_doc_ids'].append(doc_path)
+            # Update Session State
+            st.session_state['all_sentences'] = all_sentences
+            st.session_state['rag_chunks'] = all_chunks
+            st.session_state['rag_chunk_ids'] = all_chunk_ids
+            st.session_state['chunk_doc_paths'] = doc_path_map
+            st.session_state['doc_embeddings'] = np.array(embeddings)
 
-            if doc_chunks:
-                embeddings = st.session_state['embeddings_model'].encode(doc_chunks)
-                all_embeddings.extend(embeddings)
-                st.session_state['my_sentences_rag'].extend(doc_chunks)
-                st.session_state['my_sentences_rag_ids'].extend(doc_chunk_ids)
-
-        if all_embeddings:
-            st.session_state['my_embeddings'] = np.array(all_embeddings)
-            st.success(f"Encoded {len(st.session_state['my_sentences_rag'])} chunks from {len(rag_docs)} documents!")
+            st.success(f"Encoded {len(all_chunks)} chunks from {len(st.session_state['rag_docs'])} documents!")
         else:
-            st.error("No embeddings were created!")
+            st.error("No valid text chunks found to embed.")
 
 
-def find_most_similar_chunks(prompt):
-    # guard if no embeddings yet
-    if st.session_state.get('my_embeddings') is None:
-        return {
-            'selected_chunk_indices': [],
-            'selected_sentence_indices': [],
-            'similarities': np.array([]),
-            'max_similarity': 0.0
-        }
+def find_similar_context(query: str) -> Dict[str, Any]:
+    """Finds most similar chunks to the query."""
+    if st.session_state.get('doc_embeddings') is None:
+        return {'indices': [], 'max_sim': 0.0, 'sentences': []}
 
-    my_question_embedding = st.session_state['embeddings_model'].encode([prompt])
-    similarities = cosine_similarity(my_question_embedding, st.session_state['my_embeddings']).flatten()
+    model = st.session_state['embeddings_model']
+    query_embedding = model.encode([query])
+
+    # Calculate Cosine Similarity
+    similarities = cosine_similarity(query_embedding, st.session_state['doc_embeddings']).flatten()
+
     if similarities.size == 0:
-        return {'selected_chunk_indices': [], 'selected_sentence_indices': [], 'similarities': similarities,
-                'max_similarity': 0.0}
+        return {'indices': [], 'max_sim': 0.0, 'sentences': []}
 
+    # Sort results
     sorted_indices = similarities.argsort()[::-1]
+
     selected_chunk_indices = []
     selected_sentence_indices = set()
-    max_similarity = float(similarities[sorted_indices[0]]) if sorted_indices.size > 0 else 0.0
+    max_sim = float(similarities[sorted_indices[0]]) if sorted_indices.size > 0 else 0.0
 
-    for chunk_idx in sorted_indices:
+    # Select chunks until sentence limit reached
+    for idx in sorted_indices:
         if len(selected_sentence_indices) >= st.session_state['nof_keep_sentences']:
             break
-        # guard in case rag ids list is shorter than expected
-        if chunk_idx >= len(st.session_state.get('my_sentences_rag_ids', [])):
-            continue
-        chunk_sentence_indices = st.session_state['my_sentences_rag_ids'][chunk_idx]
-        selected_chunk_indices.append(int(chunk_idx))
-        selected_sentence_indices.update(chunk_sentence_indices)
 
-    selected_sentence_indices = sorted(list(selected_sentence_indices))
+        chunk_sentence_ids = st.session_state['rag_chunk_ids'][idx]
+        selected_chunk_indices.append(int(idx))
+        selected_sentence_indices.update(chunk_sentence_ids)
+
     return {
-        'selected_chunk_indices': selected_chunk_indices,
-        'selected_sentence_indices': selected_sentence_indices,
-        'similarities': similarities,
-        'max_similarity': max_similarity
+        'chunk_indices': selected_chunk_indices,
+        'sentence_indices': sorted(list(selected_sentence_indices)),
+        'max_similarity': max_sim
     }
 
 
-def generate_hypothetical_answer(prompt):
-    """Generate a hypothetical answer using the LLM"""
-    hyde_system_instructions = "You are a helpful assistant that generates a hypothetical answer to the user's question. Be brief and concise. Provide your answer in 100 words or less."
+# --- LLM Interaction ---
 
+def get_hf_client():
+    """Initializes or retrieves the HuggingFace Inference Client."""
+    token = os.getenv("HF_TOKEN")
+    if st.session_state.get('space_id'):
+        token = None  # Spaces often handle auth internally or via specific env vars
+    return InferenceClient(st.session_state['llm_model_name'], token=token)
+
+
+def query_llm(messages: List[Dict], max_tokens: int = 512) -> str:
+    """Generic function to stream responses from the LLM."""
+    client = get_hf_client()
+    response_text = ""
     try:
-        hyde_messages = [
-            {"role": "system", "content": hyde_system_instructions},
-            {"role": "user", "content": prompt}
-        ]
-
-        hypothetical_answer = ""
-        for packet in st.session_state['client'].chat.completions.create(
-                messages=hyde_messages,
-                model=st.session_state['my_llm_model'],
-                stream=True,
-                max_tokens=512):
-            choice = getattr(packet, "choices", None)
-            if not choice:
-                continue
-            first_choice = choice[0]
-            delta = getattr(first_choice, "delta", None)
-            content_piece = getattr(delta, "content", None)
-            if not content_piece:
-                continue
-            hypothetical_answer += content_piece
-
-        return hypothetical_answer.strip()
+        stream = client.chat.completions.create(
+            messages=messages,
+            model=st.session_state['llm_model_name'],
+            stream=True,
+            max_tokens=max_tokens
+        )
+        for chunk in stream:
+            content = chunk.choices[0].delta.content
+            if content:
+                response_text += content
+        return response_text.strip()
     except Exception as e:
-        return f"Error generating hypothetical answer: {str(e)}"
+        return f"Error communicating with LLM: {str(e)}"
 
 
-def generate_response_with_retrieved_docs(prompt, selected_sentence_indices, retrieval_info=None):
-    """Generate response using retrieved documents"""
-    if not selected_sentence_indices:
-        return "No relevant information found to answer this question.", retrieval_info
+def generate_rag_response(query: str, sentence_indices: List[int]) -> Tuple[str, Dict]:
+    """Generates a response based on retrieved context with token safety limits."""
+    if not sentence_indices:
+        return "No relevant information found.", {}
 
-    context_text = "\n".join([st.session_state['my_sentences'][idx] for idx in selected_sentence_indices])
+    # --- SAFETY FIX START ---
+    # Heuristic: 1 token ~= 4 chars.
+    # Limit context to ~30,000 tokens (approx 120,000 chars) to be safe and leave room for history/response.
+    MAX_CONTEXT_CHARS = 120000
+
+    context_parts = []
+    current_char_count = 0
+
+    # Iterate through indices and add text until we hit the limit
+    for idx in sentence_indices:
+        sentence = st.session_state['all_sentences'][idx]
+        if current_char_count + len(sentence) < MAX_CONTEXT_CHARS:
+            context_parts.append(sentence)
+            current_char_count += len(sentence)
+        else:
+            # Stop adding context if we exceed the limit
+            break
+
+    context_text = "\n".join(context_parts)
+    # --- SAFETY FIX END ---
+
     augmented_prompt = (
-            "Context information:\n\n"
-            + context_text
-            + "\n\nBased on the above context, answer this question: "
-            + prompt
-            + "\nIf the context doesn't contain relevant information, say you don't know based on the available information."
+        f"Context information:\n\n{context_text}\n\n"
+        f"Based on the above context, answer this question: {query}\n"
+        "If the context doesn't contain relevant information, say you don't know based on the available information."
     )
 
-    temp_messages = st.session_state['my_chat_messages'] + [{"role": "user", "content": augmented_prompt}]
+    # Use existing chat history + new prompt
+    messages = st.session_state['chat_history'] + [{"role": "user", "content": augmented_prompt}]
 
-    response = ""
-    try:
-        for packet in st.session_state['client'].chat.completions.create(
-                messages=temp_messages,
-                model=st.session_state['my_llm_model'],
-                stream=True,
-                max_tokens=1024):
-            choice = getattr(packet, "choices", None)
-            if not choice:
-                continue
-            first_choice = choice[0]
-            delta = getattr(first_choice, "delta", None)
-            content_piece = getattr(delta, "content", None)
-            if not content_piece:
-                continue
-            response += content_piece
-    except Exception as e:
-        response = f"Error generating response: {str(e)}"
+    # (Optional) Double check total history size here if needed
 
-    return response, retrieval_info
+    response = query_llm(messages, max_tokens=1024)
+
+    retrieval_meta = {
+        "context_length_chars": len(context_text),
+        "sentences_retrieved": len(sentence_indices),
+        "sentences_used": len(context_parts)  # Might be lower if truncation occurred
+    }
+    return response, retrieval_meta
+
+def run_hyde_process(query: str) -> Tuple[str, str, Dict, float]:
+    """Runs the HyDE (Hypothetical Document Embeddings) pipeline."""
+    # 1. Generate Hypothetical Answer
+    hyde_messages = [
+        {"role": "system", "content": HYDE_SYSTEM_PROMPT},
+        {"role": "user", "content": query}
+    ]
+    hypothetical_answer = query_llm(hyde_messages)
+
+    # 2. Retrieve based on Hypothetical Answer
+    sim_results = find_similar_context(hypothetical_answer)
+
+    # 3. Generate Final Response
+    if sim_results['max_similarity'] > st.session_state['similarity_threshold'] and sim_results['sentence_indices']:
+        final_response, _ = generate_rag_response(query, sim_results['sentence_indices'])
+    else:
+        final_response = (
+            f"HyDE couldn't find relevant information. Similarity ({sim_results['max_similarity']:.2f}) "
+            f"is below threshold ({st.session_state['similarity_threshold']})."
+        )
+
+    return final_response, hypothetical_answer, sim_results, sim_results['max_similarity']
 
 
-# ui
-st.expander("Disclaimer", expanded=False).markdown(
-    "This application is experimental. Large Language Models may provide wrong answers. Verify results and comply with applicable laws."
+# --- Session State Management ---
+
+def initialize_session_state():
+    """Initializes all session state variables."""
+    defaults = {
+        'llm_model_name': DEFAULT_LLM_MODEL,
+        'space_id': os.environ.get("SPACE_ID"),
+        'embeddings_model': SentenceTransformer(EMBEDDING_MODEL_NAME),
+        'min_window_size': 5,
+        'max_window_size': 10,
+        'similarity_threshold': 0.2,
+        'nof_keep_sentences': 20,
+        'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}],
+        'hyde_history': [],
+        'rag_docs': None,
+        'all_sentences': [],
+        'doc_embeddings': None,
+        'current_comparison': {}
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+    # Load Docs only once
+    if st.session_state['rag_docs'] is None:
+        st.session_state['rag_docs'] = load_texts_from_directory(DATA_DIRECTORY)
+
+
+# --- UI Components ---
+
+def render_sidebar():
+    with st.sidebar:
+        st.header("HyDE Settings")
+
+        if st.session_state['hyde_history']:
+            st.subheader("Recent HyDE Responses")
+            # Show last 5
+            for entry in reversed(st.session_state['hyde_history'][-5:]):
+                with st.expander(f"Q: {entry['question'][:40]}..."):
+                    st.caption("Hypothetical Answer:")
+                    st.write(entry['hypothetical'][:150] + "...")
+                    st.caption("Final Result:")
+                    st.write(entry['response'])
+
+        if st.button("Clear HyDE History"):
+            st.session_state['hyde_history'] = []
+            st.rerun()
+
+
+def render_chat_interface():
+    container = st.container(height=500)
+    container.chat_message("ai", avatar=":material/robot_2:").markdown("Hello, how can I help you today?")
+
+    # Display History
+    for msg in st.session_state['chat_history']:
+        if msg['role'] == "user":
+            container.chat_message("user", avatar=":material/psychology_alt:").markdown(msg['content'])
+        elif msg['role'] == "assistant":
+            # We differentiate stored messages by checking if they are 'normal' or 'hyde' in a custom key
+            # or simply display standard chat history.
+            # For this specific app structure, we display the last generated results explicitly below.
+            # To avoid clutter, we skip rendering old standard messages inside the loop if the logic relies on the
+            # 'current_comparison' view, but for a standard chat feel:
+            if msg.get('type') == 'hyde':
+                with container.expander("🔍 **HyDE Response**"):
+                    st.markdown(msg['content'])
+            elif msg.get('type') == 'normal':
+                container.chat_message("ai", avatar=":material/robot_2:").markdown(
+                    f"**Standard RAG:** {msg['content']}")
+
+    return container
+
+
+# --- Main Application Execution ---
+
+initialize_session_state()
+
+# Ensure embeddings exist
+if st.session_state['doc_embeddings'] is None:
+    process_documents_and_embed()
+
+# Disclaimer
+st.expander("Disclaimer").markdown(
+    "This application is experimental. Large Language Models may provide wrong answers."
 )
 
-if "my_chat_messages" not in st.session_state:
-    st.session_state['my_chat_messages'] = [{"role": "system", "content": my_system_instructions}]
+render_sidebar()
+msg_container = render_chat_interface()
 
-if "my_sentences_rag" not in st.session_state:
-    create_sentences_rag()
+# Input Handling
+if prompt := st.chat_input("Ask a question regarding the documents..."):
+    msg_container.chat_message("user", avatar=":material/psychology_alt:").markdown(prompt)
 
-messages_container = st.container(height=500)
-messages_container.chat_message("ai", avatar=":material/robot_2:").markdown(first_message)
+    col1, col2 = msg_container.columns(2)
 
-# Display chat history
-for message in st.session_state['my_chat_messages']:
-    role = message.get('role')
-    content = message.get('content', '')
-    msg_type = message.get('type', 'normal')  # 'normal' or 'hyde'
-
-    if role == "user":
-        messages_container.chat_message("user", avatar=":material/psychology_alt:").markdown(content)
-    elif role == "assistant":
-        if msg_type == 'hyde':
-            # Display HyDE response with different styling
-            with messages_container.expander(f"🔍 **HyDE Response**", expanded=True):
-                st.markdown(content)
-        else:
-            # Display normal RAG response
-            messages_container.chat_message("ai", avatar=":material/robot_2:").markdown(f"**Standard RAG:** {content}")
-
-if prompt := st.chat_input("you may ask here your questions"):
-    messages_container.chat_message("user", avatar=":material/psychology_alt:").markdown(prompt)
-
-    # Create two columns for responses
-    col1, col2 = messages_container.columns(2)
-
-    # Standard RAG Response (left column)
+    # --- Standard RAG ---
     with col1:
-        with st.spinner("Generating Standard RAG response..."):
-            st.markdown("### Standard RAG Response")
+        with st.spinner("Standard RAG..."):
+            st.markdown("### Standard RAG")
+            sim_results = find_similar_context(prompt)
 
-            similarity_results = find_most_similar_chunks(prompt)
-            selected_chunk_indices = similarity_results['selected_chunk_indices']
-            selected_sentence_indices = similarity_results['selected_sentence_indices']
-            similarities = similarity_results['similarities']
-            max_similarity = similarity_results['max_similarity']
-
-            # Generate response if we have good match
-            if max_similarity > float(st.session_state['my_similarity_threshold']) and selected_sentence_indices:
-                standard_response, _ = generate_response_with_retrieved_docs(prompt, selected_sentence_indices)
-                st.markdown(standard_response)
-
-                # Store retrieval info for standard RAG
-                retrieved_doc_paths = []
-                for i in selected_chunk_indices:
-                    if i < len(st.session_state.get('my_doc_ids', [])):
-                        retrieved_doc_paths.append(st.session_state['my_doc_ids'][i])
-                unique_doc_names = sorted(list({os.path.basename(p) for p in retrieved_doc_paths}))
-
-                standard_retrieval_info = {
-                    "query": prompt,
-                    "max_similarity": float(max_similarity),
-                    "threshold": float(st.session_state['my_similarity_threshold']),
-                    "chunks_retrieved": len(selected_chunk_indices),
-                    "sentences_used": len(selected_sentence_indices),
-                    "total_chunks_available": len(st.session_state.get('my_sentences_rag', [])),
-                    "similar_documents_found": unique_doc_names,
-                    "method": "standard_rag"
-                }
+            if sim_results['max_similarity'] > st.session_state['similarity_threshold']:
+                std_response, _ = generate_rag_response(prompt, sim_results['sentence_indices'])
             else:
-                standard_response = (
-                    f"I don't have enough relevant information to answer this question. "
-                    f"The best match has {100 * float(max_similarity):.2f}% similarity, which is below the threshold of "
-                    f"{100 * float(st.session_state['my_similarity_threshold']):.2f}%."
-                )
-                st.markdown(standard_response)
-                standard_retrieval_info = {
-                    "method": "standard_rag",
-                    "max_similarity": float(max_similarity),
-                    "threshold": float(st.session_state['my_similarity_threshold']),
-                    "status": "below_threshold"
-                }
+                std_response = f"Low similarity ({sim_results['max_similarity']:.2f}). No relevant info found."
 
-            # Store the standard response in session state
-            st.session_state["current_standard_response"] = standard_response
+            st.markdown(std_response)
 
-    # HyDE Response (right column)
+            # Metadata for display
+            std_meta = {
+                "max_similarity": float(sim_results['max_similarity']),
+                "chunks_found": len(sim_results['chunk_indices'])
+            }
+
+    # --- HyDE RAG ---
     with col2:
-        with st.spinner("Generating HyDE response..."):
+        with st.spinner("HyDE processing..."):
             st.markdown("### HyDE Response")
+            hyde_response, hyde_hypothetical, hyde_sim_results, hyde_score = run_hyde_process(prompt)
+            st.markdown(hyde_response)
 
-            # Step 1: Generate hypothetical answer
-            hypothetical_answer = generate_hypothetical_answer(prompt)
+            # Metadata for display
+            hyde_meta = {
+                "max_similarity": float(hyde_score),
+                "hypothetical_preview": hyde_hypothetical[:100] + "..."
+            }
 
-            # Step 2: Use hypothetical answer to find similar documents
-            hyde_similarity_results = find_most_similar_chunks(hypothetical_answer)
-            hyde_selected_sentence_indices = hyde_similarity_results['selected_sentence_indices']
-            hyde_max_similarity = hyde_similarity_results['max_similarity']
-            hyde_selected_chunk_indices = hyde_similarity_results['selected_chunk_indices']
+    # Update History
+    st.session_state['chat_history'].append({"role": "user", "content": prompt})
+    st.session_state['chat_history'].append({"role": "assistant", "content": std_response, "type": "normal"})
+    st.session_state['chat_history'].append({"role": "assistant", "content": hyde_response, "type": "hyde"})
 
-            # Step 3: Generate final answer using retrieved documents
-            if hyde_max_similarity > float(
-                    st.session_state['my_similarity_threshold']) and hyde_selected_sentence_indices:
-                hyde_response, _ = generate_response_with_retrieved_docs(prompt, hyde_selected_sentence_indices)
-                st.markdown(hyde_response)
-
-                # Store retrieval info for HyDE
-                hyde_retrieved_doc_paths = []
-                for i in hyde_selected_chunk_indices:
-                    if i < len(st.session_state.get('my_doc_ids', [])):
-                        hyde_retrieved_doc_paths.append(st.session_state['my_doc_ids'][i])
-                hyde_unique_doc_names = sorted(list({os.path.basename(p) for p in hyde_retrieved_doc_paths}))
-
-                hyde_retrieval_info = {
-                    "query": prompt,
-                    "hypothetical_answer": hypothetical_answer[:500] + "..." if len(
-                        hypothetical_answer) > 500 else hypothetical_answer,
-                    "max_similarity": float(hyde_max_similarity),
-                    "threshold": float(st.session_state['my_similarity_threshold']),
-                    "chunks_retrieved": len(hyde_selected_chunk_indices),
-                    "sentences_used": len(hyde_selected_sentence_indices),
-                    "similar_documents_found": hyde_unique_doc_names,
-                    "method": "hyde"
-                }
-            else:
-                hyde_response = (
-                    f"HyDE couldn't find relevant information. "
-                    f"The hypothetical answer had {100 * float(hyde_max_similarity):.2f}% similarity, which is below the threshold of "
-                    f"{100 * float(st.session_state['my_similarity_threshold']):.2f}%."
-                )
-                st.markdown(hyde_response)
-                hyde_retrieval_info = {
-                    "method": "hyde",
-                    "hypothetical_answer": hypothetical_answer[:500] + "..." if len(
-                        hypothetical_answer) > 500 else hypothetical_answer,
-                    "max_similarity": float(hyde_max_similarity),
-                    "threshold": float(st.session_state['my_similarity_threshold']),
-                    "status": "below_threshold"
-                }
-
-            # Store the HyDE response in session state
-            st.session_state["current_hyde_response"] = hyde_response
-
-    # Store both responses for comparison
-    st.session_state["current_responses"] = {
+    # Update HyDE specific history
+    st.session_state['hyde_history'].append({
         "question": prompt,
-        "standard": standard_response,
-        "hyde": hyde_response,
-        "hypothetical_answer": hypothetical_answer
-    }
+        "hypothetical": hyde_hypothetical,
+        "response": hyde_response
+    })
 
-    # Store conversation
-    st.session_state['my_chat_messages'].append({"role": "user", "content": prompt})
-    st.session_state['my_chat_messages'].append({"role": "assistant", "content": standard_response, "type": "normal"})
-    st.session_state['my_chat_messages'].append({"role": "assistant", "content": hyde_response, "type": "hyde"})
+    # Keep history manageable
+    if len(st.session_state['chat_history']) > 20:
+        st.session_state['chat_history'] = [st.session_state['chat_history'][0]] + st.session_state['chat_history'][
+            -18:]
 
-    # Store HyDE responses separately for comparison
-    hyde_entry = {
-        "question": prompt,
-        "standard_response": standard_response,
-        "hyde_response": hyde_response,
-        "hypothetical_answer": hypothetical_answer,
-        "timestamp": st.session_state.get("timestamp", 0)
-    }
-    st.session_state["hyde_responses"].append(hyde_entry)
+    # --- Debug/Info Expanders ---
+    with msg_container.expander("Retrieval Details", expanded=False):
+        t1, t2 = st.tabs(["Standard", "HyDE"])
+        t1.json(std_meta)
+        t2.json(hyde_meta)
+        t2.markdown(f"**Full Hypothetical Answer:**\n{hyde_hypothetical}")
 
-    # Limit chat history
-    if len(st.session_state['my_chat_messages']) > 20:
-        st.session_state['my_chat_messages'] = [st.session_state['my_chat_messages'][0]] + st.session_state[
-            'my_chat_messages'][-18:]
-
-    # Display retrieval info in expanders
-    with messages_container.expander("Retrieval Information", expanded=False):
-        tab1, tab2 = st.tabs(["Standard RAG", "HyDE"])
-
-        with tab1:
-            st.write("**Standard RAG Retrieval Info:**")
-            st.json(standard_retrieval_info, expanded=False)
-
-        with tab2:
-            st.write("**HyDE Retrieval Info:**")
-            st.json(hyde_retrieval_info, expanded=False)
-
-            # Show hypothetical answer details
-            with st.expander("View Hypothetical Answer"):
-                st.markdown(f"**Generated Hypothetical Answer:**")
-                st.markdown(hypothetical_answer)
-
-    # Add comparison section - This must be AFTER both responses are generated and stored
-    with messages_container.expander("Compare Responses", expanded=False):
-        # Get the current responses from session state
-        current_responses = st.session_state.get("current_responses", {})
-
-        if current_responses:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Standard RAG:**")
-                # Use a container with border for better visibility
-                with st.container(border=True):
-                    if "standard" in current_responses:
-                        st.markdown(current_responses["standard"])
-                    else:
-                        st.info("Standard response not available")
-            with col2:
-                st.markdown("**HyDE Response:**")
-                with st.container(border=True):
-                    if "hyde" in current_responses:
-                        st.markdown(current_responses["hyde"])
-                    else:
-                        st.info("HyDE response not available")
-        else:
-            st.info("No responses available for comparison yet.")
-
-# Add sidebar with HyDE settings and info
-with st.sidebar:
-    st.header("HyDE Settings")
-
-    if st.session_state.get("hyde_responses"):
-        st.subheader("Recent HyDE Responses")
-        for i, entry in enumerate(reversed(st.session_state["hyde_responses"][-5:])):
-            with st.expander(
-                    f"Q: {entry['question'][:50]}..." if len(entry['question']) > 50 else f"Q: {entry['question']}"):
-                st.markdown("**Question:**")
-                st.write(entry['question'])
-                st.markdown("**Hypothetical Answer:**")
-                st.write(
-                    entry['hypothetical_answer'][:200] + "..." if len(entry['hypothetical_answer']) > 200 else entry[
-                        'hypothetical_answer'])
-                st.markdown("**Final HyDE Response:**")
-                st.write(entry['hyde_response'])
-
-    if st.button("Clear HyDE History"):
-        st.session_state["hyde_responses"] = []
-        st.rerun()
+    # --- Comparison View ---
+    with msg_container.expander("Compare Responses", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Standard")
+            st.info(std_response)
+        with c2:
+            st.caption("HyDE")
+            st.success(hyde_response)
