@@ -66,22 +66,33 @@ def scrape_wiki_page(url):
 
     if episodes:
         for ep_row in episodes:
-            # Helper to get text from row
-            title_text = ' '.join(cell.get_text(strip=True) for cell in ep_row.find_all(['td', 'th']))
+            # Helper to get text from row with separator to prevent merging
+            title_text = ' '.join(cell.get_text(separator=' ', strip=True) for cell in ep_row.find_all(['td', 'th']))
 
             # Find expand child
             next_row = ep_row.find_next_sibling('tr', class_='expand-child')
-            expand_text = ' '.join(
-                cell.get_text(strip=True) for cell in next_row.find_all(['td', 'th'])) if next_row else ''
+            expand_text = ' '.join(cell.get_text(separator=' ', strip=True) for cell in
+                                   next_row.find_all(['td', 'th'])) if next_row else ''
 
             full_text = f"{title_text}\n\n{expand_text}".strip()
+
+            # Normalize spaces after extraction
+            full_text = re.sub(r'\s+', ' ', full_text).strip()
+
             if title_text:
                 extracted_data.append((title_text, full_text))
         return extracted_data
 
     # Fallback to standard paragraph text
     paragraphs = content_div.find_all('p')
-    page_text = '\n\n'.join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+    # Use separator=' ' to ensure nested tags (like <a> or <b>) don't merge with surrounding text
+    page_text = '\n\n'.join(p.get_text(separator=' ', strip=True) for p in paragraphs if p.get_text(strip=True))
+
+    # Clean up potentially excessive spaces created by the separator
+    # We allow \n\n to persist (for paragraph breaks), but squash spaces within lines
+    lines = [re.sub(r'\s+', ' ', line).strip() for line in page_text.split('\n\n')]
+    page_text = '\n\n'.join(line for line in lines if line)
+
     return page_text if page_text else None
 
 
@@ -92,11 +103,11 @@ def process_and_save(file_path: str, raw_text: str, url: str, title: str, scrape
     Processes the raw text into two versions (Transformers & TF-IDF) and saves a single JSON.
     """
     # 1. Prepare Transformers Text (Light cleaning)
-    transformers_text = scraper_helper.smart_respace(text=raw_text)
+    # We do a basic respace here to ensure the text is clean before any helper logic
+    # transformers_text = scraper_helper.smart_respace(text=raw_text)
 
     # 2. Prepare TF-IDF Text (Heavy cleaning)
-    # Start with the smart respaced text
-    tf_text = transformers_text
+    tf_text = raw_text
     tf_text = scraper_helper.lowercase_text(text=tf_text)
     tf_text = scraper_helper.replace_urls(text=tf_text)
     tf_text = scraper_helper.remove_and_print(text=tf_text)
@@ -112,7 +123,7 @@ def process_and_save(file_path: str, raw_text: str, url: str, title: str, scrape
     document_data = {
         "title": title,
         "url": url,
-        "transformers_text": transformers_text,
+        "transformers_text": raw_text,
         "tf_idf_text": tf_text
     }
 
@@ -156,6 +167,9 @@ def get_corpus(scraper_helper):
     ensure_directory_exists(corpus_root)
 
     for i, child_url in enumerate(list(valid_links)):
+        # if i > 10:
+        #     break
+        print(f"Scraping {child_url}")
         page_data = scrape_wiki_page(child_url)
 
         if not page_data:

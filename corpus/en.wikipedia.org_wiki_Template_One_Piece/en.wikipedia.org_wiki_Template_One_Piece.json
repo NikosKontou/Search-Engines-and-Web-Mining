@@ -1,6 +1,6 @@
 {
     "title": "en.wikipedia.org_wiki_Template_One_Piece",
     "url": "https://en.wikipedia.org/wiki/Template:One_Piece",
-    "transformers_text": "This template's initial visibility currently defaults to autocollapse meaning that if there is another collapsible item on the page a navbox sidebar or table with the collapsible attribute it is hidden apart from its title bar if not it is fully visible To change this template's initial visibility the state parameter may be used",
+    "transformers_text": "This template's initial visibility currently defaults to autocollapse , meaning that if there is another collapsible item on the page (a navbox, sidebar , or table with the collapsible attribute ), it is hidden apart from its title bar; if not, it is fully visible.\n\nTo change this template's initial visibility, the |state= parameter may be used:",
     "tf_idf_text": "template initial visibility currently default autocollapse mean another collapsible item page navbox sidebar table collapsible attribute hidden apart title bar not fully visible change templates initial visibility state parameter may use"
 }

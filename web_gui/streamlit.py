@@ -270,7 +270,7 @@ def initialize_session_state():
         'min_window_size': 5,
         'max_window_size': 10,
         'similarity_threshold': 0.2,
-        'nof_keep_sentences': 20,
+        'nof_keep_sentences': 5,
         'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}],
         'hyde_history': [],
         'rag_docs': None,

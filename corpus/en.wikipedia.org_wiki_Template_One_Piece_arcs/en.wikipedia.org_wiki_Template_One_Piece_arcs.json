@@ -1,6 +1,6 @@
 {
     "title": "en.wikipedia.org_wiki_Template_One_Piece_arcs",
     "url": "https://en.wikipedia.org/wiki/Template:One_Piece_arcs",
-    "transformers_text": "This is a table template that displays the major story arcs sagas and storylines of the media franchise One Piece and indexes each one to manga chapter s volume s and anime episode s and season s One Piece arcs",
+    "transformers_text": "This is a table template that displays the major story arcs, sagas, and storylines of the media franchise One Piece and indexes each one to manga chapter(s), volume(s), and anime episode(s) and season(s).\n\n{{ One Piece arcs }}",
     "tf_idf_text": "table template display major story arc saga storyline medium franchise one piece index one manga chapter volume anime episode season one piece arc"
 }
